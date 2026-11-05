@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: fix-my-city
+    runtime: node
+    plan: free
+    rootDir: outputs
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fix-my-city-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-6-astra
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: STAFF_EMAIL
+        sync: false
+      - key: STAFF_PASSWORD
+        sync: false
+      - key: APP_SESSION_SECRET
+        generateValue: true
+
+databases:
+  - name: fix-my-city-db
+    databaseName: fix_my_city
+    user: fix_my_city
+    plan: free
