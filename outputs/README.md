@@ -6,6 +6,8 @@ This project includes a Render Blueprint at the repository root (`render.yaml`) 
 
 The app uses PostgreSQL for reports. New reports submitted from any device are stored in the shared database and available in the employee portal; employee status changes sync back to public report tracking. Staff reports refresh automatically every 20 seconds while the staff dashboard is open. To deploy on another Node host, set its root directory to `outputs`, build command to `npm install`, start command to `npm start`, and configure `DATABASE_URL`, `STAFF_EMAIL`, `STAFF_PASSWORD`, and a long random `APP_SESSION_SECRET`. It listens on the host-provided `PORT` and has a `/healthz` health check.
 
+The first deployment seeds the employee account from `STAFF_EMAIL` and `STAFF_PASSWORD`. After signing in, use **Employee details** to change the email and/or password; the updated credentials are stored as a password hash in PostgreSQL and remain in effect after redeploys. The login form includes a password visibility toggle, and the employee workspace has a log-out button.
+
 **Hackathon demo limits:** Render's free PostgreSQL databases currently expire 30 days after creation and have no backups. Upgrade the database or use another persistent PostgreSQL service if you need to keep reports beyond the demo. This is a prototype, not a production civic records system; before handling real sensitive reports, add stronger account management, role-based staff accounts, abuse protection, backups, and a privacy/data-retention policy. [Render free plan limitations](https://render.com/docs/free)
 
 ## Run the website

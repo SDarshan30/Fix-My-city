@@ -4,6 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { promisify } = require('node:util');
 const { Pool } = require('pg');
 
 const PORT = Number(process.env.PORT || 4173);
@@ -11,12 +12,13 @@ const MODEL = process.env.OPENAI_MODEL || 'gpt-6-astra';
 const CATEGORIES = ['Road Damage', 'Garbage', 'Drainage', 'Water Leakage', 'Streetlight', 'Other'];
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : undefined });
 const SESSION_SECRET = process.env.APP_SESSION_SECRET || '';
+const scrypt = promisify(crypto.scrypt);
 
-function staffToken(email, expires) {
-  const payload = `${email}.${expires}`;
+function staffToken(email, expires, version) {
+  const payload = JSON.stringify({ email, expires, version });
   return `${Buffer.from(payload).toString('base64url')}.${crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url')}`;
 }
-function isStaff(req) {
+async function getStaffSession(req) {
   if (!SESSION_SECRET || !process.env.STAFF_EMAIL || !process.env.STAFF_PASSWORD) return false;
   const cookie = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('fixcity_staff='));
   if (!cookie) return false;
@@ -26,11 +28,23 @@ function isStaff(req) {
     const payload = Buffer.from(encoded, 'base64url').toString();
     const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest();
     const actual = Buffer.from(signature, 'base64url');
-    const separator = payload.lastIndexOf('.');
-    if (separator < 1) return false;
-    const email = payload.slice(0, separator);
-    const expires = payload.slice(separator + 1);
-    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected) && email === String(process.env.STAFF_EMAIL).trim().toLowerCase() && Number(expires) > Date.now();
+    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return false;
+    const session = JSON.parse(payload);
+    const result = await pool.query('SELECT email, auth_version FROM staff_accounts WHERE id = 1');
+    const account = result.rows[0];
+    return account && session.email === account.email && session.version === account.auth_version && Number(session.expires) > Date.now() ? account : false;
+  } catch { return false; }
+}
+async function makePasswordHash(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = await scrypt(password, salt, 64);
+  return { salt, hash: hash.toString('hex') };
+}
+async function verifyPassword(password, salt, savedHash) {
+  try {
+    const expected = Buffer.from(savedHash, 'hex');
+    const actual = await scrypt(password, salt, expected.length);
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
   } catch { return false; }
 }
 function secureCookie(req) { return process.env.NODE_ENV === 'production' || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''; }
@@ -76,22 +90,48 @@ const server = http.createServer(async (req, res) => {
     let data;
     try { data = await readJson(req); } catch (error) { return send(res, 400, { error: error.message || 'Invalid request.' }); }
     const email = String(data.email || '').trim().toLowerCase();
-    const expectedEmail = String(process.env.STAFF_EMAIL || '').trim().toLowerCase();
     const password = String(data.password || '');
-    const expectedPassword = String(process.env.STAFF_PASSWORD || '');
-    const matches = value => value.length === expectedPassword.length && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expectedPassword));
-    if (!expectedEmail || !expectedPassword || !SESSION_SECRET || email !== expectedEmail || !matches(password)) return send(res, 401, { error: 'Sign-in details did not match.' });
+    if (!SESSION_SECRET) return send(res, 503, { error: 'Employee sign-in is not configured.' });
+    let result;
+    try { result = await pool.query('SELECT email, password_salt, password_hash, auth_version FROM staff_accounts WHERE id = 1'); }
+    catch (error) { console.error('Staff account lookup failed:', error.message); return send(res, 503, { error: 'Could not check employee sign-in. Try again shortly.' }); }
+    const account = result.rows[0];
+    if (!account || email !== account.email || !(await verifyPassword(password, account.password_salt, account.password_hash))) return send(res, 401, { error: 'Sign-in details did not match.' });
     const expires = Date.now() + 8 * 60 * 60 * 1000;
-    res.setHeader('Set-Cookie', `fixcity_staff=${encodeURIComponent(staffToken(expectedEmail, expires))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${secureCookie(req)}`);
-    return send(res, 200, { ok: true });
+    res.setHeader('Set-Cookie', `fixcity_staff=${encodeURIComponent(staffToken(account.email, expires, account.auth_version))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${secureCookie(req)}`);
+    return send(res, 200, { ok: true, email: account.email });
   }
-  if (req.method === 'GET' && url.pathname === '/api/staff/session') return send(res, 200, { authenticated: isStaff(req) });
+  if (req.method === 'POST' && url.pathname === '/api/staff/account') {
+    const account = await getStaffSession(req);
+    if (!account) return send(res, 401, { error: 'Please sign in again before changing account details.' });
+    let data;
+    try { data = await readJson(req); } catch (error) { return send(res, 400, { error: error.message || 'Invalid request.' }); }
+    const currentPassword = String(data.currentPassword || '');
+    const newEmail = String(data.email || account.email).trim().toLowerCase();
+    const newPassword = String(data.newPassword || '');
+    if (!await verifyPassword(currentPassword, account.password_salt, account.password_hash)) return send(res, 401, { error: 'Current password is incorrect.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail) || newEmail.length > 200) return send(res, 400, { error: 'Enter a valid work email address.' });
+    if (newPassword && newPassword.length < 10) return send(res, 400, { error: 'New password must be at least 10 characters.' });
+    if (!newPassword && newEmail === account.email) return send(res, 400, { error: 'Enter a new email or a new password to update.' });
+    const credentials = newPassword ? await makePasswordHash(newPassword) : { salt: account.password_salt, hash: account.password_hash };
+    try {
+      const result = await pool.query('UPDATE staff_accounts SET email = $1, password_salt = $2, password_hash = $3, auth_version = auth_version + 1, updated_at = NOW() WHERE id = 1 RETURNING email, auth_version', [newEmail, credentials.salt, credentials.hash]);
+      const updated = result.rows[0];
+      const expires = Date.now() + 8 * 60 * 60 * 1000;
+      res.setHeader('Set-Cookie', `fixcity_staff=${encodeURIComponent(staffToken(updated.email, expires, updated.auth_version))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${secureCookie(req)}`);
+      return send(res, 200, { ok: true, email: updated.email });
+    } catch (error) { console.error('Staff account update failed:', error.message); return send(res, 503, { error: 'Could not save employee account changes.' }); }
+  }
+  if (req.method === 'GET' && url.pathname === '/api/staff/session') {
+    const account = await getStaffSession(req);
+    return send(res, 200, { authenticated: !!account, email: account?.email || null });
+  }
   if (req.method === 'POST' && url.pathname === '/api/staff/logout') {
     res.setHeader('Set-Cookie', `fixcity_staff=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureCookie(req)}`);
     return send(res, 200, { ok: true });
   }
   if (req.method === 'GET' && url.pathname === '/api/issues') {
-    if (!isStaff(req)) return send(res, 401, { error: 'Employee sign-in required.' });
+    if (!await getStaffSession(req)) return send(res, 401, { error: 'Employee sign-in required.' });
     try { const result = await pool.query('SELECT report FROM civic_reports ORDER BY created_at DESC'); return send(res, 200, { issues: result.rows.map(row => row.report) }); }
     catch (error) { console.error('Report list failed:', error.message); return send(res, 503, { error: 'Could not load reports from the shared database.' }); }
   }
@@ -119,7 +159,7 @@ const server = http.createServer(async (req, res) => {
     } catch (error) { console.error('Report lookup failed:', error.message); return send(res, 503, { error: 'Could not check the shared report database.' }); }
   }
   if (req.method === 'PATCH' && publicMatch) {
-    if (!isStaff(req)) return send(res, 401, { error: 'Employee sign-in required.' });
+    if (!await getStaffSession(req)) return send(res, 401, { error: 'Employee sign-in required.' });
     let updates;
     try { updates = await readJson(req, 5 * 1024 * 1024); } catch (error) { return send(res, 400, { error: error.message || 'Invalid request.' }); }
     const allowed = ['worker', 'status', 'afterPhoto', 'assignedAt', 'submittedAt', 'resolvedAt'];
@@ -212,6 +252,19 @@ async function start() {
     report JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS staff_accounts (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    email TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    auth_version INTEGER NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  const staff = await pool.query('SELECT id FROM staff_accounts WHERE id = 1');
+  if (!staff.rowCount && process.env.STAFF_EMAIL && process.env.STAFF_PASSWORD) {
+    const credentials = await makePasswordHash(process.env.STAFF_PASSWORD);
+    await pool.query('INSERT INTO staff_accounts (id, email, password_salt, password_hash) VALUES (1, $1, $2, $3)', [process.env.STAFF_EMAIL.trim().toLowerCase(), credentials.salt, credentials.hash]);
+  }
   server.listen(PORT, HOST, () => {
     console.log(`Fix My City is listening on ${HOST}:${PORT}`);
     console.log(`AI model: ${MODEL}${process.env.OPENAI_API_KEY ? '' : ' (AI inactive: OPENAI_API_KEY is not set)'}`);
