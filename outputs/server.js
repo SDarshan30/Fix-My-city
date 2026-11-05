@@ -26,7 +26,10 @@ function isStaff(req) {
     const payload = Buffer.from(encoded, 'base64url').toString();
     const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest();
     const actual = Buffer.from(signature, 'base64url');
-    const [email, expires] = payload.split('.');
+    const separator = payload.lastIndexOf('.');
+    if (separator < 1) return false;
+    const email = payload.slice(0, separator);
+    const expires = payload.slice(separator + 1);
     return actual.length === expected.length && crypto.timingSafeEqual(actual, expected) && email === String(process.env.STAFF_EMAIL).trim().toLowerCase() && Number(expires) > Date.now();
   } catch { return false; }
 }
