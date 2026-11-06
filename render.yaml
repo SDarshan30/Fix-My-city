@@ -12,10 +12,10 @@ services:
         fromDatabase:
           name: fix-my-city-db
           property: connectionString
-      - key: ANTHROPIC_API_KEY
+      - key: XAI_API_KEY
         sync: false
-      - key: CLAUDE_MODEL
-        value: claude-sonnet-4-6
+      - key: GROK_MODEL
+        value: grok-4.7
       - key: GOOGLE_MAPS_API_KEY
         sync: false
       - key: STAFF_EMAIL
