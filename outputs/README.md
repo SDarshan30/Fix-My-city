@@ -61,4 +61,8 @@ The app can then turn a GPS fix into a readable Google Maps address, or look up 
 
 Public report tracking requires the private report ID and exposes the issue category, location, status, and submitted date. Reporter name, contact details, and the all-reports staff list require the employee session. Keep database credentials and staff passwords in the hosting provider's secret settings; never put them in the HTML or GitHub repository.
 
+## Replace reports with Tamil Nadu demo data
+
+The optional `npm run seed:demo` command permanently replaces every row in `civic_reports` with 100 fictional Tamil Nadu sample reports: 20 unassigned, 20 assigned, and 60 resolved. Each sample is marked `DEMO SAMPLE` and has no reporter name, phone, or GPS coordinates. It prints the database target and requires the exact confirmation phrase before changing anything. Set `DATABASE_URL` to the intended database first. Do not run it against production reports you need to keep.
+
 The server uses Groq’s OpenAI-compatible chat completions endpoint. See the [Groq quickstart](https://console.groq.com/docs/quickstart), [model list](https://console.groq.com/docs/models), and [rate limits](https://console.groq.com/docs/rate-limits).
