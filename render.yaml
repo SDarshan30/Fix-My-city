@@ -12,10 +12,10 @@ services:
         fromDatabase:
           name: fix-my-city-db
           property: connectionString
-      - key: OPENAI_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-6-astra
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
       - key: GOOGLE_MAPS_API_KEY
         sync: false
       - key: STAFF_EMAIL
