@@ -77,8 +77,9 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
   if (req.method === 'GET' && ['/', '/index.html', '/staff', '/staff/'].includes(url.pathname)) {
-    const portal = url.pathname.startsWith('/staff') ? 'staff' : 'public';
-    const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').replace('<body>', `<body data-portal="${portal}">`);
+    const page = url.pathname.startsWith('/staff') ? 'staff.html' : 'index.html';
+    const portal = page === 'staff.html' ? 'staff' : 'public';
+    const html = fs.readFileSync(path.join(__dirname, page), 'utf8').replace('<body>', `<body data-portal="${portal}">`);
     return send(res, 200, html, 'text/html; charset=utf-8');
   }
 
