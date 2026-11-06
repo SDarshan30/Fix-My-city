@@ -12,10 +12,10 @@ services:
         fromDatabase:
           name: fix-my-city-db
           property: connectionString
-      - key: XAI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
-      - key: GROK_MODEL
-        value: grok-4.7
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
       - key: GOOGLE_MAPS_API_KEY
         sync: false
       - key: STAFF_EMAIL
